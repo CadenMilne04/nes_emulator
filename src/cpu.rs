@@ -332,6 +332,13 @@ impl CPU {
 
         self.set_register_a(self.register_a & value);
     }
+
+    fn ora(&mut self, mode: &AddressingMode){
+        let addr = self.get_operand_address(mode);
+        let value = self.mem_read(addr);
+
+        self.set_register_a(self.register_a | value);
+    }
     
     fn eor(&mut self, mode: &AddressingMode){
         let addr = self.get_operand_address(mode);
@@ -342,11 +349,7 @@ impl CPU {
 
     fn asl_accumulator(&mut self){
         let mut data = self.register_a;
-        if data >> 7 == 1 {
-            self.status.insert(CpuFlags::CARRY)
-        } else {
-            self.status.remove(CpuFlags::CARRY)
-        }
+        self.update_carry_flag(data >> 7 == 1);
         data = data << 1;
         self.set_register_a(data)
     }
@@ -354,15 +357,76 @@ impl CPU {
     fn asl(&mut self, mode: &AddressingMode){
         let addr = self.get_operand_address(mode);
         let mut data = self.mem_read(addr);
-        if data >> 7 == 1 {
-            self.status.insert(CpuFlags::CARRY)
-        } else {
-            self.status.remove(CpuFlags::CARRY)
-        }
+
+        self.update_carry_flag(data >> 7 == 1);
         data = data << 1;
         self.mem_write(addr, data);
         self.update_zero_and_negative_flags(data);
         // data
+    }
+
+    fn lsr_accumulator(&mut self){
+        let mut data = self.register_a;
+        self.update_carry_flag(data & 1 == 1);
+        data = data >> 1;
+        self.set_register_a(data)
+    }
+
+    fn lsr(&mut self, mode: &AddressingMode){
+        let addr = self.get_operand_address(mode);
+        let mut data = self.mem_read(addr);
+
+        self.update_carry_flag(data & 1 == 1);
+
+        data = data >> 1;
+        self.mem_write(addr, data);
+        self.update_zero_and_negative_flags(data);
+    }
+
+    fn rol_accumulator(&mut self, mode: &AddressingMode){
+        let mut data = self.register_a;
+        let old_c = self.status.contains(CpuFlags::CARRY);
+
+        self.update_carry_flag(data >> 7 == 1);
+
+        data = data << 1;
+        if old_c {
+            data = data | 1;
+        }
+
+        self.set_register_a(data);
+    }
+
+    fn rol(&mut self, mode: &AddressingMode){
+        let addr = self.get_operand_address(mode);
+        let mut data = self.mem_read(addr);
+        let old_c = self.status.contains(CpuFlags::CARRY);
+
+        self.update_carry_flag(data >> 7 == 1);
+
+        data = data << 1;
+        if old_c {
+            data = data | 1;
+        }
+
+        self.mem_write(addr, data);
+        self.update_zero_and_negative_flags(data);
+    }
+
+
+
+    fn php(&mut self) {
+        //http://wiki.nesdev.com/w/index.php/CPU_status_flag_behavior
+        let mut flags = self.status.clone();
+        flags.insert(CpuFlags::BREAK);
+        flags.insert(CpuFlags::BREAK2);
+        self.stack_push(flags.bits());
+    }
+
+    fn plp(&mut self) {
+        self.status.bits = self.stack_pop();
+        self.status.remove(CpuFlags::BREAK);
+        self.status.insert(CpuFlags::BREAK2);
     }
 
     fn bit(&mut self, mode: &AddressingMode){
@@ -536,6 +600,28 @@ impl CPU {
                     self.asl(&opcode.mode);
                 }
                 
+                /* LSR - Logical Shift Right */
+                0x4a => self.lsr_accumulator(),
+
+                0x46 | 0x56 | 0x4e | 0x5e => {
+                    self.lsr(&opcode.mode);
+                }
+
+                /* ROL - Rotate Left */
+                0x2a => self.rol_accumulator(),
+
+                0x26 | 0x36 | 0x2e | 0x3e => {
+                    self.rol(&opcode.mode);
+                }
+
+                /* ROR - Rotate Right*/
+                0x6a => self.ror_accumulator(),
+
+                0x66 | 0x76 | 0x6e | 0x7e => {
+                    self.ror(&opcode.mode);
+                }
+ 
+                
                 /* BCC - Branch if Carry Clear */
                 0x90 => self.branch(!self.status.contains(CpuFlags::CARRY)),
                 /* BCS - Branch if Carry Set */
@@ -591,10 +677,27 @@ impl CPU {
                 /* CLV - Clear Overflow Flag */
                 0xb8 => self.status.remove(CpuFlags::OVERFLOW),
 
+                /* ORA - Logical Inclusive OR */
+                0x09 | 0x05 | 0x15 | 0x0d | 0x1d | 0x19 | 0x01 | 0x11 => {
+                    self.ora(&opcode.mode);
+                }
+
                 /* EOR - Exclusive OR */
                 0x49 | 0x45 | 0x55 | 0x4d | 0x5d | 0x59 | 0x41 | 0x51 => {
                     self.eor(&opcode.mode);
                 }
+
+                /* PHA - Push Accumulator */
+                0x48 => self.stack_push(self.register_a),
+
+                /* PHP - Push Processor Status */
+                0x08 => self.php(),
+
+                /* PLP - Pull Processor Status */
+                0x28 => self.plp(),
+
+                /* PLA - Pull Accumulator */
+                0x68 => self.set_register_a(self.stack_pop()),
 
                 /* JMP - Jump */
                 0x4c => self.jmp_abs(),
@@ -612,9 +715,10 @@ impl CPU {
                     self.program_counter = self.stack_pop_u16();
                 }
 
+                /* NOP - No Operation */
+                0xea => {}
 
-
-
+                /* BRK - Break */
                 0x00 => return,
                 _ => todo!(),
             }//End Match
