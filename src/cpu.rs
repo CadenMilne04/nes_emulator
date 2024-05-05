@@ -14,6 +14,7 @@ bitflags! {
     ///  | +--------------- Overflow Flag
     ///  +----------------- Negative Flag
     ///
+    #[derive(Clone)]
     pub struct CpuFlags: u8 {
         const CARRY             = 0b00000001;
         const ZERO              = 0b00000010;
@@ -303,9 +304,14 @@ impl CPU {
         self.mem_write(addr, self.register_a);
     }
 
-    fn tax(&mut self) {
-        self.register_x = self.register_a;
-        self.update_zero_and_negative_flags(self.register_x);
+    fn stx(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        self.mem_write(addr, self.register_x);
+    }
+
+    fn sty(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        self.mem_write(addr, self.register_y);
     }
 
     fn inc(&mut self, mode: &AddressingMode) {
@@ -383,7 +389,7 @@ impl CPU {
         self.update_zero_and_negative_flags(data);
     }
 
-    fn rol_accumulator(&mut self, mode: &AddressingMode){
+    fn rol_accumulator(&mut self){
         let mut data = self.register_a;
         let old_c = self.status.contains(CpuFlags::CARRY);
 
@@ -413,7 +419,31 @@ impl CPU {
         self.update_zero_and_negative_flags(data);
     }
 
+    fn ror_accumulator(&mut self){
+        let mut data = self.register_a;
+        let old_carry = self.status.contains(CpuFlags::CARRY);
 
+        self.update_carry_flag(data & 1 == 1);
+        data = data >> 1;
+        if old_carry {
+            data = data | 0b10000000;
+        }
+        self.set_register_a(data);
+    }
+
+    fn ror(&mut self, mode: &AddressingMode){
+        let addr = self.get_operand_address(mode);
+        let mut data = self.mem_read(addr);
+        let old_carry = self.status.contains(CpuFlags::CARRY);
+
+        self.update_carry_flag(data & 1 == 1);
+        data = data >> 1;
+        if old_carry {
+            data = data | 0b10000000;
+        }
+        self.mem_write(addr, data);
+        self.update_zero_and_negative_flags(data);
+    }
 
     fn php(&mut self) {
         //http://wiki.nesdev.com/w/index.php/CPU_status_flag_behavior
@@ -424,7 +454,7 @@ impl CPU {
     }
 
     fn plp(&mut self) {
-        self.status.bits = self.stack_pop();
+        self.status = CpuFlags::from_bits_truncate(self.stack_pop());
         self.status.remove(CpuFlags::BREAK);
         self.status.insert(CpuFlags::BREAK2);
     }
@@ -577,8 +607,34 @@ impl CPU {
                     self.sta(&opcode.mode);
                 }
 
-                0xaa => self.tax(),
+                /* STX - Store X Register */
+                0x86 | 0x96 | 0x8e => {
+                    self.stx(&opcode.mode);
+                }
 
+                /* STY - Store Y Register */
+                0x84 | 0x94 | 0x8c => {
+                    self.sty(&opcode.mode);
+                }
+
+                /* TAX - Transfer Accumulator to X */
+                0xaa => self.set_register_x(self.register_a),
+
+                /* TAY - Transfer Accumulator to Y */
+                0xa8 => self.set_register_y(self.register_a),
+
+                /* TSX - Transfer Stack Pointer to X */
+                0xba => self.set_register_x(self.stack_pointer),
+                
+                /* TXA - Transfer X to Accumulator */
+                0x8a => self.set_register_a(self.register_x),
+
+                /* TXS - Transfer X to Stack Pointer */
+                0x9a => self.stack_pointer = self.register_x,
+
+                /* TYA - Transfer Y to Accumulator */
+                0x98 => self.set_register_a(self.register_y),
+                
                 /* INC - Increment Memory */
                 0xe6 | 0xf6 | 0xee | 0xfe => {
                     self.inc(&opcode.mode);
@@ -620,7 +676,6 @@ impl CPU {
                 0x66 | 0x76 | 0x6e | 0x7e => {
                     self.ror(&opcode.mode);
                 }
- 
                 
                 /* BCC - Branch if Carry Clear */
                 0x90 => self.branch(!self.status.contains(CpuFlags::CARRY)),
@@ -697,7 +752,10 @@ impl CPU {
                 0x28 => self.plp(),
 
                 /* PLA - Pull Accumulator */
-                0x68 => self.set_register_a(self.stack_pop()),
+                0x68 => {
+                    let data = self.stack_pop();
+                    self.set_register_a(data);
+                }
 
                 /* JMP - Jump */
                 0x4c => self.jmp_abs(),
@@ -714,6 +772,24 @@ impl CPU {
                 0x60 => {
                     self.program_counter = self.stack_pop_u16();
                 }
+
+                /* RTI - Return from Interrupt */
+                0x40 => {
+                    self.status = CpuFlags::from_bits_truncate(self.stack_pop());
+                    self.status.remove(CpuFlags::BREAK);
+                    self.status.insert(CpuFlags::BREAK2);
+
+                    self.program_counter = self.stack_pop_u16();
+                }
+
+                /* SEC- Set Carry Flag */
+                0x38 => self.status.insert(CpuFlags::CARRY),
+
+                /* SED- Set Decimal Flag */
+                0xf8 => self.status.insert(CpuFlags::DECIMAL_MODE),
+
+                /* SEI- Set Interrupt Disable */
+                0x78 => self.status.insert(CpuFlags::INTERRUPT_DISABLE),
 
                 /* NOP - No Operation */
                 0xea => {}
