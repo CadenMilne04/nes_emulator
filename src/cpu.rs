@@ -55,7 +55,7 @@ pub enum AddressingMode {
    NoneAddressing,
 }
 
-trait Mem {
+pub trait Mem {
     fn mem_read(&self, addr: u16) -> u8; 
 
     fn mem_write(&mut self, addr: u16, data: u8);
@@ -533,8 +533,8 @@ impl CPU {
 
     //CPU loading, running, and initialization
     pub fn load(&mut self, program: Vec<u8>) {
-        self.memory[0x8000 .. (0x8000 + program.len())].copy_from_slice(&program[..]);
-        self.mem_write_u16(0xFFFC, 0x8000);
+        self.memory[0x0600 .. (0x0600 + program.len())].copy_from_slice(&program[..]);
+        self.mem_write_u16(0xFFFC, 0x0600);
     }
 
     pub fn load_and_run(&mut self, program: Vec<u8>) {
@@ -566,9 +566,19 @@ impl CPU {
     }
 
     pub fn run(&mut self) {
+        self.run_with_callback(|_| {});
+    }
+
+    //Now, the client code can provide a callback that will be executed before every opcode interpretation cycle.
+    pub fn run_with_callback<F>(&mut self, mut callback: F)
+    where
+        F: FnMut(&mut CPU),
+    {
         let ref opcodes: HashMap<u8, &'static opcodes::OpCode> = *opcodes::OPCODES_MAP;
 
         loop {
+            callback(self);
+
             let code = self.mem_read(self.program_counter);
             self.program_counter += 1;
             let program_counter_state = self.program_counter;
@@ -770,7 +780,7 @@ impl CPU {
 
                 /* RTS - Return from Subroutine */
                 0x60 => {
-                    self.program_counter = self.stack_pop_u16();
+                    self.program_counter = self.stack_pop_u16() + 1;
                 }
 
                 /* RTI - Return from Interrupt */
