@@ -1,3 +1,3 @@
-I will be working on this project for a while. Yes I will be. For certain...
+This is a fully functional snake game written for the 6502. 
 
-Now I am working on the snake.
+It is running on my simulated cpu, and it uses the SDL2 library for input and output. 
