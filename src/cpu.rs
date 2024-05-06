@@ -86,7 +86,7 @@ impl Mem for CPU {
 }
  
 impl CPU {
-    pub fn new() -> Self {
+    pub fn new(bus: Bus) -> Self {
         CPU {
             register_a: 0,
             register_x: 0,
@@ -94,7 +94,7 @@ impl CPU {
             status: CpuFlags::from_bits_truncate(0b100100),
             stack_pointer: STACK_RESET,
             program_counter: 0,
-            bus: Bus::new(),
+            bus: bus,
         }
     }
 
