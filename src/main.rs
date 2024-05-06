@@ -1,5 +1,6 @@
 pub mod cpu;
 pub mod opcodes;
+pub mod bus;
 
 use cpu::Mem;
 use cpu::CPU;
@@ -119,6 +120,7 @@ fn main() {
     let mut cpu = CPU::new();
     cpu.load(game_code);
     cpu.reset();
+    cpu.program_counter = 0x0600;
 
     let mut screen_state = [0 as u8; 32 * 3 * 32];
     let mut rng = rand::thread_rng();
