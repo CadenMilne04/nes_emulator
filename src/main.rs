@@ -122,7 +122,7 @@ fn main() {
 
     let mut screen_state = [0 as u8; 32 * 3 * 32];
     let mut rng = rand::thread_rng();
-    let range = Uniform::new(1, 16); // Define a range from 1 to 15
+    let range = Uniform::new(1, 32);
 
     cpu.run_with_callback(move |cpu| {
        handle_user_input(cpu, &mut event_pump);
