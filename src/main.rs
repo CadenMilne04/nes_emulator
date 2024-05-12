@@ -1,15 +1,24 @@
-pub mod cpu;
-pub mod opcodes;
 pub mod bus;
 pub mod cartridge;
+pub mod cpu;
+pub mod opcodes;
+pub mod ppu;
+pub mod render;
 
-use crate::cpu::AddressingMode;
 use bus::Bus;
 use cartridge::Rom;
 use cpu::Mem;
 use cpu::CPU;
+use render::frame::Frame;
+use render::palette;
+// use rand::Rng;
 
-use std::collections::HashMap;
+use sdl2::event::Event;
+use sdl2::keyboard::Keycode;
+use sdl2::pixels::Color;
+use sdl2::pixels::PixelFormatEnum;
+use sdl2::EventPump;
+// use std::time::Duration;
 
 #[macro_use]
 extern crate lazy_static;
@@ -17,144 +26,116 @@ extern crate lazy_static;
 #[macro_use]
 extern crate bitflags;
 
-fn trace(cpu: &CPU) -> String {
-    let ref opscodes: HashMap<u8, &'static opcodes::OpCode> = *opcodes::OPCODES_MAP;
+fn show_tile(chr_rom: &Vec<u8>, bank: usize, tile_n: usize) ->Frame {
+    assert!(bank <= 1);
 
-    let code = cpu.mem_read(cpu.program_counter);
-    let ops = opscodes.get(&code).unwrap();
+    let mut frame = Frame::new();
+    let bank = (bank * 0x1000) as usize;
+    
+    let tile = &chr_rom[(bank + tile_n * 16)..=(bank + tile_n * 16 + 15)];
 
-    let begin = cpu.program_counter;
-    let mut hex_dump = vec![];
-    hex_dump.push(code);
+    for y in 0..=7 {
+        let mut upper = tile[y];
+        let mut lower = tile[y + 8];
 
-    let (mem_addr, stored_value) = match ops.mode {
-        AddressingMode::Immediate | AddressingMode::NoneAddressing => (0, 0),
-        _ => {
-            let addr = cpu.get_absolute_address(&ops.mode, begin + 1);
-            (addr, cpu.mem_read(addr))
+        for x in (0..=7).rev() {
+            let value = (1 & upper) << 1 | (1 & lower);
+            upper = upper >> 1;
+            lower = lower >> 1;
+            let rgb = match value {
+                0 => palette::SYSTEM_PALLETE[0x01],
+                1 => palette::SYSTEM_PALLETE[0x23],
+                2 => palette::SYSTEM_PALLETE[0x27],
+                3 => palette::SYSTEM_PALLETE[0x30],
+                _ => panic!("can't be"),
+            };
+            frame.set_pixel(x, y, rgb)
         }
-    };
+    }
 
-    let tmp = match ops.len {
-        1 => match ops.code {
-            0x0a | 0x4a | 0x2a | 0x6a => format!("A "),
-            _ => String::from(""),
-        },
-        2 => {
-            let address: u8 = cpu.mem_read(begin + 1);
-            // let value = cpu.mem_read(address));
-            hex_dump.push(address);
-
-            match ops.mode {
-                AddressingMode::Immediate => format!("#${:02x}", address),
-                AddressingMode::ZeroPage => format!("${:02x} = {:02x}", mem_addr, stored_value),
-                AddressingMode::ZeroPage_X => format!(
-                    "${:02x},X @ {:02x} = {:02x}",
-                    address, mem_addr, stored_value
-                ),
-                AddressingMode::ZeroPage_Y => format!(
-                    "${:02x},Y @ {:02x} = {:02x}",
-                    address, mem_addr, stored_value
-                ),
-                AddressingMode::Indirect_X => format!(
-                    "(${:02x},X) @ {:02x} = {:04x} = {:02x}",
-                    address,
-                    (address.wrapping_add(cpu.register_x)),
-                    mem_addr,
-                    stored_value
-                ),
-                AddressingMode::Indirect_Y => format!(
-                    "(${:02x}),Y = {:04x} @ {:04x} = {:02x}",
-                    address,
-                    (mem_addr.wrapping_sub(cpu.register_y as u16)),
-                    mem_addr,
-                    stored_value
-                ),
-                AddressingMode::NoneAddressing => {
-                    // assuming local jumps: BNE, BVS, etc....
-                    let address: usize =
-                        (begin as usize + 2).wrapping_add((address as i8) as usize);
-                    format!("${:04x}", address)
-                }
-
-                _ => panic!(
-                    "unexpected addressing mode {:?} has ops-len 2. code {:02x}",
-                    ops.mode, ops.code
-                ),
-            }
-        }
-        3 => {
-            let address_lo = cpu.mem_read(begin + 1);
-            let address_hi = cpu.mem_read(begin + 2);
-            hex_dump.push(address_lo);
-            hex_dump.push(address_hi);
-
-            let address = cpu.mem_read_u16(begin + 1);
-
-            match ops.mode {
-                AddressingMode::NoneAddressing => {
-                    if ops.code == 0x6c {
-                        //jmp indirect
-                        let jmp_addr = if address & 0x00FF == 0x00FF {
-                            let lo = cpu.mem_read(address);
-                            let hi = cpu.mem_read(address & 0xFF00);
-                            (hi as u16) << 8 | (lo as u16)
-                        } else {
-                            cpu.mem_read_u16(address)
-                        };
-
-                        // let jmp_addr = cpu.mem_read_u16(address);
-                        format!("(${:04x}) = {:04x}", address, jmp_addr)
-                    } else {
-                        format!("${:04x}", address)
-                    }
-                }
-                AddressingMode::Absolute => format!("${:04x} = {:02x}", mem_addr, stored_value),
-                AddressingMode::Absolute_X => format!(
-                    "${:04x},X @ {:04x} = {:02x}",
-                    address, mem_addr, stored_value
-                ),
-                AddressingMode::Absolute_Y => format!(
-                    "${:04x},Y @ {:04x} = {:02x}",
-                    address, mem_addr, stored_value
-                ),
-                _ => panic!(
-                    "unexpected addressing mode {:?} has ops-len 3. code {:02x}",
-                    ops.mode, ops.code
-                ),
-            }
-        }
-        _ => String::from(""),
-    };
-
-    let hex_str = hex_dump
-        .iter()
-        .map(|z| format!("{:02x}", z))
-        .collect::<Vec<String>>()
-        .join(" ");
-    let asm_str = format!("{:04x}  {:8} {: >4} {}", begin, hex_str, ops.mnemonic, tmp)
-        .trim()
-        .to_string();
-
-    format!(
-        "{:47} A:{:02x} X:{:02x} Y:{:02x} P:{:02x} SP:{:02x}",
-        asm_str, cpu.register_a, cpu.register_x, cpu.register_y, cpu.status, cpu.stack_pointer,
-    )
-    .to_ascii_uppercase()
+    frame
 }
 
+
+fn show_tile_bank(chr_rom: &Vec<u8>, bank: usize) ->Frame {
+    assert!(bank <= 1);
+
+    let mut frame = Frame::new();
+    let mut tile_y = 0;
+    let mut tile_x = 0;
+    let bank = (bank * 0x1000) as usize;
+
+    for tile_n in 0..255 {
+        if tile_n != 0 && tile_n % 20 == 0 {
+            tile_y += 10;
+            tile_x = 0;
+        }
+        let tile = &chr_rom[(bank + tile_n * 16)..=(bank + tile_n * 16 + 15)];
+
+        for y in 0..=7 {
+            let mut upper = tile[y];
+            let mut lower = tile[y + 8];
+
+            for x in (0..=7).rev() {
+                let value = (1 & upper) << 1 | (1 & lower);
+                upper = upper >> 1;
+                lower = lower >> 1;
+                let rgb = match value {
+                    0 => palette::SYSTEM_PALLETE[0x01],
+                    1 => palette::SYSTEM_PALLETE[0x23],
+                    2 => palette::SYSTEM_PALLETE[0x27],
+                    3 => palette::SYSTEM_PALLETE[0x30],
+                    _ => panic!("can't be"),
+                };
+                frame.set_pixel(tile_x + x, tile_y + y, rgb)
+            }
+        }
+
+        tile_x += 10;
+    }
+    frame
+}
+
+
 fn main() {
-    //Load the game
-    let bytes: Vec<u8> = std::fs::read("nestest.nes").unwrap();
+    // init sdl2
+    let sdl_context = sdl2::init().unwrap();
+    let video_subsystem = sdl_context.video().unwrap();
+    let window = video_subsystem
+        .window("Tile viewer", (256.0 * 3.0) as u32, (240.0 * 3.0) as u32)
+        .position_centered()
+        .build()
+        .unwrap();
+
+    let mut canvas = window.into_canvas().present_vsync().build().unwrap();
+    let mut event_pump = sdl_context.event_pump().unwrap();
+    canvas.set_scale(3.0, 3.0).unwrap();
+
+    let creator = canvas.texture_creator();
+    let mut texture = creator
+        .create_texture_target(PixelFormatEnum::RGB24, 256, 240)
+        .unwrap();
+
+    //load the game
+    let bytes: Vec<u8> = std::fs::read("pacman.nes").unwrap();
     let rom = Rom::new(&bytes).unwrap();
 
-    let bus = Bus::new(rom);
-    let mut cpu = CPU::new(bus);
-    cpu.reset();
-    cpu.program_counter = 0xC000;
+    let right_bank = show_tile_bank(&rom.chr_rom, 1);
 
-    //run game cycle
-    cpu.run_with_callback(move |cpu| {
-        println!("{}", trace(cpu));
-    });
+    texture.update(None, &right_bank.data, 256 * 3).unwrap();
+    canvas.copy(&texture, None, None).unwrap();
+    canvas.present();
+
+    loop {
+        for event in event_pump.poll_iter() {
+            match event {
+              Event::Quit { .. }
+              | Event::KeyDown {
+                  keycode: Some(Keycode::Escape),
+                  ..
+              } => std::process::exit(0),
+              _ => { /* do nothing */ }
+            }
+         }
+    }
 }
