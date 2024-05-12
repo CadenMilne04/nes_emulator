@@ -38,6 +38,8 @@ impl Rom {
             (false, false) => Mirroring::HORIZONTAL,
         };
 
+        println!("{:?}", screen_mirroring);
+
         let prg_rom_size = raw[4] as usize * PRG_ROM_PAGE_SIZE;
         let chr_rom_size = raw[5] as usize * CHR_ROM_PAGE_SIZE;
 
