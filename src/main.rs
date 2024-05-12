@@ -3,99 +3,26 @@ pub mod cartridge;
 pub mod cpu;
 pub mod opcodes;
 pub mod ppu;
+pub mod joypad;
 pub mod render;
 
 use bus::Bus;
 use cartridge::Rom;
-use cpu::Mem;
 use cpu::CPU;
 use render::frame::Frame;
-use render::palette;
-// use rand::Rng;
+use ppu::NesPPU;
+
+use std::collections::HashMap;
 
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
-use sdl2::pixels::Color;
 use sdl2::pixels::PixelFormatEnum;
-use sdl2::EventPump;
-// use std::time::Duration;
 
 #[macro_use]
 extern crate lazy_static;
 
 #[macro_use]
 extern crate bitflags;
-
-fn show_tile(chr_rom: &Vec<u8>, bank: usize, tile_n: usize) ->Frame {
-    assert!(bank <= 1);
-
-    let mut frame = Frame::new();
-    let bank = (bank * 0x1000) as usize;
-    
-    let tile = &chr_rom[(bank + tile_n * 16)..=(bank + tile_n * 16 + 15)];
-
-    for y in 0..=7 {
-        let mut upper = tile[y];
-        let mut lower = tile[y + 8];
-
-        for x in (0..=7).rev() {
-            let value = (1 & upper) << 1 | (1 & lower);
-            upper = upper >> 1;
-            lower = lower >> 1;
-            let rgb = match value {
-                0 => palette::SYSTEM_PALLETE[0x01],
-                1 => palette::SYSTEM_PALLETE[0x23],
-                2 => palette::SYSTEM_PALLETE[0x27],
-                3 => palette::SYSTEM_PALLETE[0x30],
-                _ => panic!("can't be"),
-            };
-            frame.set_pixel(x, y, rgb)
-        }
-    }
-
-    frame
-}
-
-
-fn show_tile_bank(chr_rom: &Vec<u8>, bank: usize) ->Frame {
-    assert!(bank <= 1);
-
-    let mut frame = Frame::new();
-    let mut tile_y = 0;
-    let mut tile_x = 0;
-    let bank = (bank * 0x1000) as usize;
-
-    for tile_n in 0..255 {
-        if tile_n != 0 && tile_n % 20 == 0 {
-            tile_y += 10;
-            tile_x = 0;
-        }
-        let tile = &chr_rom[(bank + tile_n * 16)..=(bank + tile_n * 16 + 15)];
-
-        for y in 0..=7 {
-            let mut upper = tile[y];
-            let mut lower = tile[y + 8];
-
-            for x in (0..=7).rev() {
-                let value = (1 & upper) << 1 | (1 & lower);
-                upper = upper >> 1;
-                lower = lower >> 1;
-                let rgb = match value {
-                    0 => palette::SYSTEM_PALLETE[0x01],
-                    1 => palette::SYSTEM_PALLETE[0x23],
-                    2 => palette::SYSTEM_PALLETE[0x27],
-                    3 => palette::SYSTEM_PALLETE[0x30],
-                    _ => panic!("can't be"),
-                };
-                frame.set_pixel(tile_x + x, tile_y + y, rgb)
-            }
-        }
-
-        tile_x += 10;
-    }
-    frame
-}
-
 
 fn main() {
     // init sdl2
@@ -120,22 +47,52 @@ fn main() {
     let bytes: Vec<u8> = std::fs::read("pacman.nes").unwrap();
     let rom = Rom::new(&bytes).unwrap();
 
-    let right_bank = show_tile_bank(&rom.chr_rom, 1);
+    let mut frame = Frame::new();
+    let mut key_map = HashMap::new();
+    key_map.insert(Keycode::Down, joypad::JoypadButton::DOWN);
+    key_map.insert(Keycode::Up, joypad::JoypadButton::UP);
+    key_map.insert(Keycode::Right, joypad::JoypadButton::RIGHT);
+    key_map.insert(Keycode::Left, joypad::JoypadButton::LEFT);
+    key_map.insert(Keycode::Space, joypad::JoypadButton::SELECT);
+    key_map.insert(Keycode::Return, joypad::JoypadButton::START);
+    key_map.insert(Keycode::A, joypad::JoypadButton::BUTTON_A);
+    key_map.insert(Keycode::S, joypad::JoypadButton::BUTTON_B);
 
-    texture.update(None, &right_bank.data, 256 * 3).unwrap();
-    canvas.copy(&texture, None, None).unwrap();
-    canvas.present();
+    // run the game cycle
+    let bus = Bus::new(rom, move |ppu: &NesPPU, joypad: &mut joypad::Joypad| {
+       render::render(ppu, &mut frame);
+       texture.update(None, &frame.data, 256 * 3).unwrap();
 
-    loop {
-        for event in event_pump.poll_iter() {
-            match event {
-              Event::Quit { .. }
-              | Event::KeyDown {
-                  keycode: Some(Keycode::Escape),
-                  ..
-              } => std::process::exit(0),
-              _ => { /* do nothing */ }
-            }
-         }
-    }
+       canvas.copy(&texture, None, None).unwrap();
+
+       canvas.present();
+       for event in event_pump.poll_iter() {
+           match event {
+               Event::Quit { .. }
+               | Event::KeyDown {
+                   keycode: Some(Keycode::Escape),
+                   ..
+               } => std::process::exit(0),
+
+
+               Event::KeyDown { keycode, .. } => {
+                   if let Some(key) = key_map.get(&keycode.unwrap_or(Keycode::Ampersand)) {
+                       joypad.set_button_pressed_status(*key, true);
+                   }
+               }
+               Event::KeyUp { keycode, .. } => {
+                   if let Some(key) = key_map.get(&keycode.unwrap_or(Keycode::Ampersand)) {
+                       joypad.set_button_pressed_status(*key, false);
+                   }
+               }
+
+               _ => { /* do nothing */ }
+           }
+       }
+    });
+
+    let mut cpu = CPU::new(bus);
+
+    cpu.reset();
+    cpu.run();
 }
